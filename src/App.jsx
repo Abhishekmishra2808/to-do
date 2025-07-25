@@ -1,4 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import AuthModal from './AuthModal';
+import { auth } from './firebase';
+import { signOut } from 'firebase/auth';
+import { 
+  subscribeToUserTasks, 
+  addTaskToFirestore, 
+  updateTaskInFirestore, 
+  deleteTaskFromFirestore 
+} from './firestoreUtils';
 
 // --- Helper & Initial Data ---
 
@@ -96,21 +105,41 @@ const AuroraBackground = () => {
     );
 };
 
-const KanbanCard = ({ task, onDragStart }) => (
-    <div
-        draggable
-        onDragStart={(e) => onDragStart(e, task.id)}
-        className="bg-gray-800/50 backdrop-blur-sm p-4 rounded-xl shadow-md border border-white/10 mb-3 cursor-grab active:cursor-grabbing transition-all duration-200 hover:shadow-lg hover:scale-105 hover:bg-gray-700/60"
-    >
-        <div className="flex items-start justify-between">
-            <p className="font-semibold text-gray-50 break-words">{task.title}</p>
-            <div style={{ backgroundColor: generateColorFromString(task.title) }} className="w-3 h-3 rounded-full flex-shrink-0 ml-2 mt-1 border border-white/10"></div>
-        </div>
-        {task.description && <p className="text-sm text-gray-300 mt-2 break-words">{task.description}</p>}
-    </div>
-);
+const KanbanCard = ({ task, onDragStart, onDeleteTask }) => {
+    const handleDelete = (e) => {
+        e.stopPropagation(); // Prevent drag events when clicking delete
+        onDeleteTask(task.id);
+    };
 
-const KanbanColumn = ({ column, tasks, onDragOver, onDrop, onDragStart }) => {
+    return (
+        <div
+            draggable
+            onDragStart={(e) => onDragStart(e, task.id)}
+            className="bg-gray-800/50 backdrop-blur-sm p-4 rounded-xl shadow-md border border-white/10 mb-3 cursor-grab active:cursor-grabbing transition-all duration-200 hover:shadow-lg hover:scale-105 hover:bg-gray-700/60 group"
+        >
+            <div className="flex items-start justify-between">
+                <p className="font-semibold text-gray-50 break-words flex-1 mr-2">{task.title}</p>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                        onClick={handleDelete}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded-full p-1 cursor-pointer"
+                        title="Delete task"
+                    >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M3 6h18"></path>
+                            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+                        </svg>
+                    </button>
+                    <div style={{ backgroundColor: generateColorFromString(task.title) }} className="w-3 h-3 rounded-full border border-white/10"></div>
+                </div>
+            </div>
+            {task.description && <p className="text-sm text-gray-300 mt-2 break-words">{task.description}</p>}
+        </div>
+    );
+};
+
+const KanbanColumn = ({ column, tasks, onDragOver, onDrop, onDragStart, onDeleteTask }) => {
     const [isHovered, setIsHovered] = useState(false);
 
     return (
@@ -130,7 +159,7 @@ const KanbanColumn = ({ column, tasks, onDragOver, onDrop, onDragStart }) => {
             </div>
             <div className="h-full min-h-[200px]">
                 {tasks.map(task => (
-                    <KanbanCard key={task.id} task={task} onDragStart={onDragStart} />
+                    <KanbanCard key={task.id} task={task} onDragStart={onDragStart} onDeleteTask={onDeleteTask} />
                 ))}
             </div>
         </div>
@@ -197,26 +226,145 @@ const TaskModal = ({ isOpen, onClose, onSave }) => {
     );
 };
 
+const UserHeader = ({ user, onLogout, onShowAuth }) => {
+    return (
+        <div className="absolute top-4 right-4 z-20">
+            {user?.guest ? (
+                <div className="flex items-center gap-3">
+                    <span className="text-gray-300 text-sm">Guest User</span>
+                    <button
+                        onClick={onShowAuth}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                    >
+                        Login
+                    </button>
+                </div>
+            ) : user?.email ? (
+                <div className="flex items-center gap-3">
+                    <span className="text-gray-300 text-sm">{user.email}</span>
+                    <button
+                        onClick={onLogout}
+                        className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                    >
+                        Logout
+                    </button>
+                </div>
+            ) : null}
+        </div>
+    );
+};
+
 export default function App() {
-    const [tasks, setTasks] = useState(() => {
-        try {
-            const savedTasks = localStorage.getItem('kanbanTasks');
-            return savedTasks ? JSON.parse(savedTasks) : initialTasks;
-        } catch (error) {
-            console.error("Failed to parse tasks from localStorage", error);
-            return initialTasks;
-        }
-    });
-
+    const [tasks, setTasks] = useState([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [user, setUser] = useState(null);
+    const [showAuthModal, setShowAuthModal] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
 
+    // Subscribe to real-time task updates when user changes
     useEffect(() => {
-        try {
-            localStorage.setItem('kanbanTasks', JSON.stringify(tasks));
-        } catch (error) {
-            console.error("Failed to save tasks to localStorage", error);
+        // Get user ID for database operations
+        const getUserId = () => {
+            if (user?.guest) return 'guest';
+            return user?.uid || user?.email || null;
+        };
+        
+        const userId = getUserId();
+        
+        if (!userId) {
+            setTasks([]);
+            setIsLoading(false);
+            return;
         }
-    }, [tasks]);
+
+        if (userId === 'guest') {
+            // For guest users, use localStorage
+            try {
+                const savedTasks = localStorage.getItem('kanbanTasks');
+                setTasks(savedTasks ? JSON.parse(savedTasks) : initialTasks);
+            } catch (error) {
+                console.error("Failed to parse tasks from localStorage", error);
+                setTasks(initialTasks);
+            }
+            setIsLoading(false);
+            return;
+        }
+
+        // For authenticated users, subscribe to Firestore
+        setIsLoading(true);
+        
+        let hasInitialized = false;
+        const unsubscribe = subscribeToUserTasks(userId, (firestoreTasks) => {
+            if (!hasInitialized) {
+                hasInitialized = true;
+                if (firestoreTasks.length === 0) {
+                    // If no tasks in Firestore, initialize with default tasks
+                    console.log("No tasks found, initializing with default tasks");
+                    const tasksToAdd = [...initialTasks];
+                    setTasks(tasksToAdd);
+                    
+                    // Add initial tasks to Firestore one by one (don't wait)
+                    tasksToAdd.forEach(task => {
+                        addTaskToFirestore(userId, task).catch(err => 
+                            console.error("Failed to add initial task:", err)
+                        );
+                    });
+                } else {
+                    console.log("Loaded tasks from Firestore:", firestoreTasks.length);
+                    setTasks(firestoreTasks);
+                }
+                setIsLoading(false);
+            } else {
+                // Subsequent updates
+                console.log("Tasks updated:", firestoreTasks.length);
+                setTasks(firestoreTasks);
+            }
+        });
+
+        return () => {
+            if (unsubscribe) {
+                unsubscribe();
+            }
+        };
+    }, [user]);
+
+    // Save to localStorage for guest users
+    useEffect(() => {
+        if (user?.guest) {
+            try {
+                localStorage.setItem('kanbanTasks', JSON.stringify(tasks));
+            } catch (error) {
+                console.error("Failed to save tasks to localStorage", error);
+            }
+        }
+    }, [tasks, user]);
+
+    const handleLogout = async () => {
+        try {
+            if (!user?.guest) {
+                await signOut(auth);
+            }
+            setUser(null);
+            setShowAuthModal(false);
+        } catch (error) {
+            console.error("Error signing out:", error);
+        }
+    };
+
+    const handleShowAuth = () => {
+        setUser(null);
+        setShowAuthModal(true);
+    };
+
+    const handleAuth = (authenticatedUser) => {
+        setUser(authenticatedUser);
+        setShowAuthModal(false);
+    };
+
+    const handleGuest = () => {
+        setUser({ guest: true });
+        setShowAuthModal(false);
+    };
 
     useEffect(() => {
         const script = document.createElement('script');
@@ -239,13 +387,56 @@ export default function App() {
         }
     }, []);
 
-    const handleAddTask = (newTaskData) => {
+    const handleAddTask = async (newTaskData) => {
+        const getUserId = () => {
+            if (user?.guest) return 'guest';
+            return user?.uid || user?.email || null;
+        };
+        
         const newTask = {
             id: `task-${Date.now()}`,
             ...newTaskData,
             status: 'todo'
         };
-        setTasks(prevTasks => [...prevTasks, newTask]);
+        
+        const userId = getUserId();
+        
+        if (userId === 'guest') {
+            // For guest users, update local state only
+            setTasks(prevTasks => [...prevTasks, newTask]);
+        } else if (userId) {
+            // For authenticated users, add to Firestore (real-time listener will update state)
+            try {
+                await addTaskToFirestore(userId, newTask);
+            } catch (error) {
+                console.error("Failed to add task:", error);
+                // Fallback to local state update
+                setTasks(prevTasks => [...prevTasks, newTask]);
+            }
+        }
+    };
+
+    const handleDeleteTask = async (taskId) => {
+        const getUserId = () => {
+            if (user?.guest) return 'guest';
+            return user?.uid || user?.email || null;
+        };
+        
+        const userId = getUserId();
+        
+        if (userId === 'guest') {
+            // For guest users, update local state only
+            setTasks(prevTasks => prevTasks.filter(task => task.id !== taskId));
+        } else if (userId) {
+            // For authenticated users, delete from Firestore
+            try {
+                await deleteTaskFromFirestore(userId, taskId);
+            } catch (error) {
+                console.error("Failed to delete task:", error);
+                // Fallback to local state update
+                setTasks(prevTasks => prevTasks.filter(task => task.id !== taskId));
+            }
+        }
     };
 
     const handleDragStart = (e, taskId) => {
@@ -258,16 +449,41 @@ export default function App() {
 
 
 
-    const handleDrop = (e, newStatus) => {
+    const handleDrop = async (e, newStatus) => {
         e.preventDefault();
         const taskId = e.dataTransfer.getData('taskId');
         
-        setTasks(prevTasks => {
-            const taskToMove = prevTasks.find(t => t.id === taskId);
-            if (!taskToMove || taskToMove.status === newStatus) return prevTasks;
-            if (newStatus === 'done' && taskToMove.status !== 'done') triggerConfetti();
-            return prevTasks.map(t => t.id === taskId ? { ...t, status: newStatus } : t);
-        });
+        const getUserId = () => {
+            if (user?.guest) return 'guest';
+            return user?.uid || user?.email || null;
+        };
+        
+        const userId = getUserId();
+        const taskToMove = tasks.find(t => t.id === taskId);
+        
+        if (!taskToMove || taskToMove.status === newStatus) return;
+        
+        if (newStatus === 'done' && taskToMove.status !== 'done') {
+            triggerConfetti();
+        }
+        
+        if (userId === 'guest') {
+            // For guest users, update local state only
+            setTasks(prevTasks => 
+                prevTasks.map(t => t.id === taskId ? { ...t, status: newStatus } : t)
+            );
+        } else if (userId) {
+            // For authenticated users, update in Firestore
+            try {
+                await updateTaskInFirestore(userId, taskId, { status: newStatus });
+            } catch (error) {
+                console.error("Failed to update task:", error);
+                // Fallback to local state update
+                setTasks(prevTasks => 
+                    prevTasks.map(t => t.id === taskId ? { ...t, status: newStatus } : t)
+                );
+            }
+        }
     };
 
     return (
@@ -279,40 +495,64 @@ export default function App() {
                 }
                 .animate-fade-in-up { animation: fade-in-up 0.3s ease-out forwards; }
             `}</style>
-            
             <AuroraBackground />
-
-            <div className="relative z-10 min-h-screen font-sans p-4 sm:p-6 lg:p-8">
-                <main className="max-w-7xl mx-auto">
-                    <header className="text-center mb-10">
-                        <h1 className="text-5xl font-bold text-gray-50">Task Flow</h1>
-                        <p className="text-gray-300 mt-2 text-lg">A fluid and interactive way to manage your workflow.</p>
-                    </header>
-
-                    <div className="flex justify-center mb-8">
-                        <button
-                            onClick={() => setIsModalOpen(true)}
-                            className="bg-black/30 backdrop-blur-sm border border-white/10 text-gray-100 font-semibold py-3 px-6 rounded-xl shadow-lg hover:bg-black/50 transition-all transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-blue-400"
-                        >
-                            ✨ Add New Task
-                        </button>
+            
+            {(!user || showAuthModal) && (
+                <AuthModal
+                    onAuth={handleAuth}
+                    onGuest={handleGuest}
+                />
+            )}
+            
+            {user && (
+                <>
+                    <UserHeader 
+                        user={user} 
+                        onLogout={handleLogout} 
+                        onShowAuth={handleShowAuth} 
+                    />
+                    <div className="relative z-10 min-h-screen font-sans p-4 sm:p-6 lg:p-8">
+                        <main className="max-w-7xl mx-auto">
+                            <header className="text-center mb-10">
+                                <h1 className="text-5xl font-bold text-gray-50">Task Flow</h1>
+                                <p className="text-gray-300 mt-2 text-lg">A fluid and interactive way to manage your workflow.</p>
+                                {!user?.guest && (
+                                    <p className="text-gray-400 text-sm mt-2">Your tasks are automatically saved and synced across devices</p>
+                                )}
+                            </header>
+                            <div className="flex justify-center mb-8">
+                                <button
+                                    onClick={() => setIsModalOpen(true)}
+                                    className="bg-black/30 backdrop-blur-sm border border-white/10 text-gray-100 font-semibold py-3 px-6 rounded-xl shadow-lg hover:bg-black/50 transition-all transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-blue-400"
+                                >
+                                    ✨ Add New Task
+                                </button>
+                            </div>
+                            {isLoading ? (
+                                <div className="text-center text-gray-300">
+                                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                                    <p className="mt-2">Loading your tasks...</p>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                    {COLUMNS.map(column => (
+                                        <KanbanColumn
+                                            key={column.id}
+                                            column={column}
+                                            tasks={tasks.filter(t => t.status === column.id)}
+                                            onDragStart={handleDragStart}
+                                            onDragOver={handleDragOver}
+                                            onDrop={handleDrop}
+                                            onDeleteTask={handleDeleteTask}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+                        </main>
                     </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {COLUMNS.map(column => (
-                            <KanbanColumn
-                                key={column.id}
-                                column={column}
-                                tasks={tasks.filter(t => t.status === column.id)}
-                                onDragStart={handleDragStart}
-                                onDragOver={handleDragOver}
-                                onDrop={handleDrop}
-                            />
-                        ))}
-                    </div>
-                </main>
-            </div>
-
+                </>
+            )}
+            
             <TaskModal
                 isOpen={isModalOpen}
                 onClose={() => setIsModalOpen(false)}
