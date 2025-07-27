@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import AuthModal from './AuthModal';
+import TaskDetailsModal from './TaskDetailsModal';
 import { auth } from './firebase';
 import { signOut } from 'firebase/auth';
 import { 
@@ -20,12 +21,21 @@ const generateColorFromString = (str) => {
     return `#${"00000".substring(0, 6 - c.length) + c}`;
 };
 
+const guestExampleTask = {
+    id: 'guest-example-1', 
+    title: 'Try dragging this task!', 
+    description: 'This is an example task. You can drag it between columns, edit it, or add new tasks using the button above.', 
+    status: 'todo',
+    priority: 'Medium',
+    createdAt: Date.now()
+};
+
 const initialTasks = [
-    { id: 'task-1', title: 'Brainstorm new feature ideas', description: 'Think about what users might want next.', status: 'todo' },
-    { id: 'task-2', title: 'Design UI mockups', description: 'Create wireframes and high-fidelity mockups in Figma.', status: 'todo' },
-    { id: 'task-3', title: 'Develop the new React components', description: 'Build out the front-end components based on the designs.', status: 'inprogress' },
-    { id: 'task-4', title: 'Set up API endpoints', description: 'Create the necessary backend routes for the new feature.', status: 'inprogress' },
-    { id: 'task-5', title: 'Review and refactor old code', description: 'Clean up the existing codebase to improve maintainability.', status: 'done' },
+    { id: 'task-1', title: 'Brainstorm new feature ideas', description: 'Think about what users might want next.', status: 'todo', priority: 'Medium', createdAt: Date.now() },
+    { id: 'task-2', title: 'Design UI mockups', description: 'Create wireframes and high-fidelity mockups in Figma.', status: 'todo', priority: 'High', createdAt: Date.now() },
+    { id: 'task-3', title: 'Develop the new React components', description: 'Build out the front-end components based on the designs.', status: 'inprogress', priority: 'High', createdAt: Date.now() },
+    { id: 'task-4', title: 'Set up API endpoints', description: 'Create the necessary backend routes for the new feature.', status: 'inprogress', priority: 'Medium', createdAt: Date.now() },
+    { id: 'task-5', title: 'Review and refactor old code', description: 'Clean up the existing codebase to improve maintainability.', status: 'done', priority: 'Low', createdAt: Date.now() },
 ];
 
 const COLUMNS = [
@@ -105,21 +115,61 @@ const AuroraBackground = () => {
     );
 };
 
-const KanbanCard = ({ task, onDragStart, onDeleteTask }) => {
+const KanbanCard = ({ task, onDragStart, onDeleteTask, onOpenDetails }) => {
     const handleDelete = (e) => {
         e.stopPropagation(); // Prevent drag events when clicking delete
         onDeleteTask(task.id);
+    };
+
+    const handleCardClick = (e) => {
+        // Don't open details if clicking delete button
+        if (e.target.closest('button')) return;
+        onOpenDetails(task);
+    };
+
+    const getPriorityColor = (priority) => {
+        switch (priority) {
+            case 'Low': return 'border-l-green-400';
+            case 'Medium': return 'border-l-yellow-400';
+            case 'High': return 'border-l-orange-400';
+            case 'Urgent': return 'border-l-red-400';
+            default: return 'border-l-gray-400';
+        }
     };
 
     return (
         <div
             draggable
             onDragStart={(e) => onDragStart(e, task.id)}
-            className="bg-gray-800/50 backdrop-blur-sm p-4 rounded-xl shadow-md border border-white/10 mb-3 cursor-grab active:cursor-grabbing transition-all duration-200 hover:shadow-lg hover:scale-105 hover:bg-gray-700/60 group"
+            onClick={handleCardClick}
+            className={`bg-gray-800/50 backdrop-blur-sm p-4 rounded-xl shadow-md border border-white/10 mb-3 cursor-pointer transition-all duration-200 hover:shadow-lg hover:scale-105 hover:bg-gray-700/60 group border-l-4 ${getPriorityColor(task.priority)}`}
         >
             <div className="flex items-start justify-between">
-                <p className="font-semibold text-gray-50 break-words flex-1 mr-2">{task.title}</p>
-                <div className="flex items-center gap-2 flex-shrink-0">
+                <div className="flex-1 min-w-0">
+                    <h4 className="text-gray-100 font-medium text-sm mb-1 truncate">{task.title}</h4>
+                    {task.priority && (
+                        <span className={`inline-block px-2 py-1 text-xs rounded-full mb-2 ${
+                            task.priority === 'Low' ? 'bg-green-400/20 text-green-400' :
+                            task.priority === 'Medium' ? 'bg-yellow-400/20 text-yellow-400' :
+                            task.priority === 'High' ? 'bg-orange-400/20 text-orange-400' :
+                            task.priority === 'Urgent' ? 'bg-red-400/20 text-red-400' : 'bg-gray-400/20 text-gray-400'
+                        }`}>
+                            {task.priority}
+                        </span>
+                    )}
+                    {task.dueDate && (
+                        <div className="text-xs text-gray-400 mb-2 flex items-center gap-1">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                                <line x1="16" y1="2" x2="16" y2="6"></line>
+                                <line x1="8" y1="2" x2="8" y2="6"></line>
+                                <line x1="3" y1="10" x2="21" y2="10"></line>
+                            </svg>
+                            Due: {new Date(task.dueDate).toLocaleDateString()}
+                        </div>
+                    )}
+                </div>
+                <div className="flex items-center gap-2 ml-2">
                     <button
                         onClick={handleDelete}
                         className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-red-400 hover:text-red-300 hover:bg-red-400/10 rounded-full p-1 cursor-pointer"
@@ -134,12 +184,12 @@ const KanbanCard = ({ task, onDragStart, onDeleteTask }) => {
                     <div style={{ backgroundColor: generateColorFromString(task.title) }} className="w-3 h-3 rounded-full border border-white/10"></div>
                 </div>
             </div>
-            {task.description && <p className="text-sm text-gray-300 mt-2 break-words">{task.description}</p>}
+            {task.description && <p className="text-sm text-gray-300 mt-2 break-words line-clamp-2">{task.description}</p>}
         </div>
     );
 };
 
-const KanbanColumn = ({ column, tasks, onDragOver, onDrop, onDragStart, onDeleteTask }) => {
+const KanbanColumn = ({ column, tasks, onDragOver, onDrop, onDragStart, onDeleteTask, onOpenDetails }) => {
     const [isHovered, setIsHovered] = useState(false);
 
     return (
@@ -159,7 +209,7 @@ const KanbanColumn = ({ column, tasks, onDragOver, onDrop, onDragStart, onDelete
             </div>
             <div className="h-full min-h-[200px]">
                 {tasks.map(task => (
-                    <KanbanCard key={task.id} task={task} onDragStart={onDragStart} onDeleteTask={onDeleteTask} />
+                    <KanbanCard key={task.id} task={task} onDragStart={onDragStart} onDeleteTask={onDeleteTask} onOpenDetails={onOpenDetails} />
                 ))}
             </div>
         </div>
@@ -260,6 +310,8 @@ export default function App() {
     const [user, setUser] = useState(null);
     const [showAuthModal, setShowAuthModal] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+    const [selectedTask, setSelectedTask] = useState(null);
+    const [isTaskDetailsOpen, setIsTaskDetailsOpen] = useState(false);
 
     // Subscribe to real-time task updates when user changes
     useEffect(() => {
@@ -281,10 +333,23 @@ export default function App() {
             // For guest users, use localStorage
             try {
                 const savedTasks = localStorage.getItem('kanbanTasks');
-                setTasks(savedTasks ? JSON.parse(savedTasks) : initialTasks);
+                const loadedTasks = savedTasks ? JSON.parse(savedTasks) : [];
+                
+                // Always ensure guest users have at least one example task to understand the app
+                if (loadedTasks.length === 0) {
+                    setTasks([guestExampleTask]);
+                } else {
+                    // Check if example task exists, if not add it
+                    const hasExampleTask = loadedTasks.some(task => task.id === 'guest-example-1');
+                    if (!hasExampleTask) {
+                        setTasks([guestExampleTask, ...loadedTasks]);
+                    } else {
+                        setTasks(loadedTasks);
+                    }
+                }
             } catch (error) {
                 console.error("Failed to parse tasks from localStorage", error);
-                setTasks(initialTasks);
+                setTasks([guestExampleTask]);
             }
             setIsLoading(false);
             return;
@@ -364,6 +429,56 @@ export default function App() {
     const handleGuest = () => {
         setUser({ guest: true });
         setShowAuthModal(false);
+    };
+
+    const handleOpenTaskDetails = (task) => {
+        setSelectedTask(task);
+        setIsTaskDetailsOpen(true);
+    };
+
+    const handleCloseTaskDetails = () => {
+        setIsTaskDetailsOpen(false);
+        setSelectedTask(null);
+    };
+
+    const handleUpdateTask = async (updatedTask) => {
+        // Get user ID for database operations
+        const getUserId = () => {
+            if (user?.guest) return 'guest';
+            return user?.uid || user?.email || null;
+        };
+        
+        const userId = getUserId();
+        
+        if (userId === 'guest') {
+            // For guest users, update local state only
+            setTasks(prevTasks => 
+                prevTasks.map(task => 
+                    task.id === updatedTask.id ? { ...updatedTask, updatedAt: Date.now() } : task
+                )
+            );
+            // Save to localStorage for guest users
+            const updatedTasks = tasks.map(task => 
+                task.id === updatedTask.id ? { ...updatedTask, updatedAt: Date.now() } : task
+            );
+            localStorage.setItem('kanbanTasks', JSON.stringify(updatedTasks));
+        } else {
+            // For authenticated users, update in Firestore
+            try {
+                await updateTaskInFirestore(userId, updatedTask.id, { 
+                    ...updatedTask, 
+                    updatedAt: Date.now() 
+                });
+            } catch (error) {
+                console.error("Failed to update task:", error);
+                // Fallback to local state update
+                setTasks(prevTasks => 
+                    prevTasks.map(task => 
+                        task.id === updatedTask.id ? { ...updatedTask, updatedAt: Date.now() } : task
+                    )
+                );
+            }
+        }
     };
 
     useEffect(() => {
@@ -494,6 +609,12 @@ export default function App() {
                     to { opacity: 1; transform: translateY(0) scale(1); }
                 }
                 .animate-fade-in-up { animation: fade-in-up 0.3s ease-out forwards; }
+                .line-clamp-2 {
+                    display: -webkit-box;
+                    -webkit-line-clamp: 2;
+                    -webkit-box-orient: vertical;
+                    overflow: hidden;
+                }
             `}</style>
             <AuroraBackground />
             
@@ -544,6 +665,7 @@ export default function App() {
                                             onDragOver={handleDragOver}
                                             onDrop={handleDrop}
                                             onDeleteTask={handleDeleteTask}
+                                            onOpenDetails={handleOpenTaskDetails}
                                         />
                                     ))}
                                 </div>
@@ -557,6 +679,13 @@ export default function App() {
                 isOpen={isModalOpen}
                 onClose={() => setIsModalOpen(false)}
                 onSave={handleAddTask}
+            />
+
+            <TaskDetailsModal
+                task={selectedTask}
+                isOpen={isTaskDetailsOpen}
+                onClose={handleCloseTaskDetails}
+                onUpdateTask={handleUpdateTask}
             />
         </>
     );
